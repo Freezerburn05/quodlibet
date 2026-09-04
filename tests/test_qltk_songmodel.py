@@ -531,5 +531,35 @@ class TPlaylistMux(TestCase):
         assert self.q.sourced
         self.assertEqual(self.mux.current, self.q[0][0])
 
+    def test_queue_loop_persistent(self):
+        """With looping enabled (Persistent mode), the queue wraps around
+        to the first song once the end is reached"""
+        self.q.set(range(5))
+        quodlibet.config.set("memory", "queue_keep_songs", True)
+        # The same composition QueueExpander applies when looping is enabled
+        self.q.order = RepeatListForever(OrderInOrder())
+        self.mux.go_to(self.q[0].iter, source=self.q)
+        self.p.emit("song-started", self.mux.current)
+        do_events()
+        for expected in (1, 2, 3, 4, 0, 1):
+            self.mux.next_ended()
+            self.p.emit("song-started", self.mux.current)
+            do_events()
+            self.assertEqual(self.mux.current, expected)
+
+    def test_queue_persistent_no_loop_stops_at_end(self):
+        """Without looping, Persistent mode stops once the queue is through"""
+        self.q.set(range(5))
+        quodlibet.config.set("memory", "queue_keep_songs", True)
+        self.mux.go_to(self.q[0].iter, source=self.q)
+        self.p.emit("song-started", self.mux.current)
+        do_events()
+        for _ in range(4):
+            self.mux.next_ended()
+            self.p.emit("song-started", self.mux.current)
+            do_events()
+        self.mux.next_ended()
+        assert self.mux.current is None
+
     def tearDown(self):
         self.p.destroy()

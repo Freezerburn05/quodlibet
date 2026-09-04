@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from gi.repository import Gtk, Gdk, Pango, GLib
 
 from quodlibet.library.base import Library
+from quodlibet.order.repeat import RepeatListForever
 from quodlibet.player._base import BasePlayer
 from quodlibet.fsn import bytes2fsn, fsn2bytes
 
@@ -152,6 +153,22 @@ class QueueExpander(Gtk.Expander):
         toggle.connect("toggled", lambda b: self.__queue_disable(b.props.active))
         outer.pack_start(toggle, False, False, 3)
 
+        self._loop_checkbox = ConfigCheckMenuItem(
+            _("Loop Queue"), "memory", "queue_loop", populate=True
+        )
+        self._loop_checkbox.set_tooltip_text(
+            _(
+                "Keep playing the queue from the beginning when it ends "
+                "(Persistent mode only)"
+            )
+        )
+        # Looping is only supported in Persistent mode, as in Ephemeral mode
+        # the queue is emptied while playing and hands over to the playlist
+        self._loop_checkbox.set_sensitive(
+            config.getboolean("memory", "queue_keep_songs", False)
+        )
+        self._loop_checkbox.connect("toggled", self.__queue_loop)
+
         mode_menu = Gtk.Menu()
 
         norm_mode_item = RadioMenuItem(
@@ -160,6 +177,7 @@ class QueueExpander(Gtk.Expander):
             group=None,
         )
         mode_menu.append(norm_mode_item)
+        self._norm_mode_item = norm_mode_item
         norm_mode_item.set_active(True)
         norm_mode_item.connect("toggled", lambda _: self.__keep_songs_enable(False))
 
@@ -169,6 +187,7 @@ class QueueExpander(Gtk.Expander):
             group=norm_mode_item,
         )
         mode_menu.append(keep_mode_item)
+        self._keep_mode_item = keep_mode_item
         keep_mode_item.connect("toggled", lambda b: self.__keep_songs_enable(True))
         keep_mode_item.set_active(
             config.getboolean("memory", "queue_keep_songs", False)
@@ -184,6 +203,7 @@ class QueueExpander(Gtk.Expander):
         rand_checkbox.connect("toggled", self.__queue_shuffle)
         self.set_shuffled(rand_checkbox.get_active())
         menu.append(rand_checkbox)
+        menu.append(self._loop_checkbox)
 
         stop_checkbox = ConfigCheckMenuItem(
             _("Stop at End"), "memory", "queue_stop_at_end", populate=True
@@ -299,6 +319,8 @@ class QueueExpander(Gtk.Expander):
                 if isinstance(col, CurrentColumn):
                     self.queue.set_first_column_type(None)
                     break
+        self._loop_checkbox.set_sensitive(enabled)
+        self._update_order()
 
     def __motion(self, wid, context, x, y, time):
         Gdk.drag_status(context, Gdk.DragAction.COPY, time)
@@ -324,8 +346,28 @@ class QueueExpander(Gtk.Expander):
     def __queue_shuffle(self, button):
         self.set_shuffled(button.get_active())
 
+    def __queue_loop(self, checkbox):
+        self._update_order()
+
     def set_shuffled(self, is_shuffled):
-        self.queue.model.order = OrderShuffle() if is_shuffled else OrderInOrder()
+        self._update_order()
+
+    def _update_order(self):
+        order = (
+            OrderShuffle()
+            if config.getboolean("memory", "shufflequeue", False)
+            else OrderInOrder()
+        )
+        # Looping is only supported in Persistent mode, as in Ephemeral mode
+        # the queue is emptied while playing and hands over to the playlist.
+        # While looping, the queue is never emptied by playback, so
+        # "Stop at End" (which triggers on an empty queue) never kicks in
+        # and looping takes precedence over it.
+        if config.getboolean("memory", "queue_loop", False) and config.getboolean(
+            "memory", "queue_keep_songs", False
+        ):
+            order = RepeatListForever(order)
+        self.queue.model.order = order
 
     def __update_queue_stop(self, player, song, stopped, model):
         enabled = config.getboolean("memory", "queue_stop_at_end", False)

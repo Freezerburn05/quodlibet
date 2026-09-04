@@ -6,7 +6,9 @@
 import os
 from time import sleep
 
+from quodlibet.order import OrderInOrder
 from quodlibet.order.reorder import OrderShuffle
+from quodlibet.order.repeat import RepeatListForever
 from quodlibet.fsn import bytes2fsn
 from tests import TestCase, run_gtk_loop
 
@@ -89,6 +91,53 @@ class TQueueExpander(TestCase):
         self.queue = self.queue = QueueExpander(SongLibrary(), NullPlayer())
         # See issue #2411
         assert isinstance(self.queue.model.order, OrderShuffle)
+
+    def test_loop_at_startup_persistent(self):
+        quodlibet.config.set("memory", "queue_keep_songs", True)
+        quodlibet.config.set("memory", "queue_loop", True)
+        self.queue = QueueExpander(SongLibrary(), NullPlayer())
+        assert isinstance(self.queue.model.order, RepeatListForever)
+
+    def test_loop_at_startup_persistent_shuffle(self):
+        quodlibet.config.set("memory", "queue_keep_songs", True)
+        quodlibet.config.set("memory", "shufflequeue", True)
+        quodlibet.config.set("memory", "queue_loop", True)
+        self.queue = QueueExpander(SongLibrary(), NullPlayer())
+        order = self.queue.model.order
+        assert isinstance(order, RepeatListForever)
+        assert isinstance(order.wrapped, OrderShuffle)
+
+    def test_loop_at_startup_ignored_in_ephemeral(self):
+        quodlibet.config.set("memory", "queue_keep_songs", False)
+        quodlibet.config.set("memory", "queue_loop", True)
+        self.queue = QueueExpander(SongLibrary(), NullPlayer())
+        assert isinstance(self.queue.model.order, OrderInOrder)
+        assert not isinstance(self.queue.model.order, RepeatListForever)
+
+    def test_loop_toggled(self):
+        quodlibet.config.set("memory", "queue_keep_songs", True)
+        self.queue = QueueExpander(SongLibrary(), NullPlayer())
+        assert not isinstance(self.queue.model.order, RepeatListForever)
+        self.queue._loop_checkbox.set_active(True)
+        assert isinstance(self.queue.model.order, RepeatListForever)
+        self.queue._loop_checkbox.set_active(False)
+        assert not isinstance(self.queue.model.order, RepeatListForever)
+
+    def test_loop_mode_switch(self):
+        # Looping only applies in Persistent mode
+        quodlibet.config.set("memory", "queue_keep_songs", False)
+        quodlibet.config.set("memory", "queue_loop", True)
+        self.queue = QueueExpander(SongLibrary(), NullPlayer())
+        assert not self.queue._loop_checkbox.get_sensitive()
+        assert not isinstance(self.queue.model.order, RepeatListForever)
+        # Switching to Persistent mode enables the option and wraps the order
+        self.queue._keep_mode_item.set_active(True)
+        assert self.queue._loop_checkbox.get_sensitive()
+        assert isinstance(self.queue.model.order, RepeatListForever)
+        # ...and back to Ephemeral it gets ignored and disabled again
+        self.queue._norm_mode_item.set_active(True)
+        assert not self.queue._loop_checkbox.get_sensitive()
+        assert not isinstance(self.queue.model.order, RepeatListForever)
 
     def tearDown(self):
         self.queue.destroy()
