@@ -1,6 +1,7 @@
 # Copyright 2005 Alexey Bobyakov <claymore.ws@gmail.com>, Joe Wreschnig
 # Copyright 2006 Lukas Lalinsky
 #      2020,2025 Nick Boultbee
+#      2026 Freezerburn05
 #           2026 Gwyneth Morgan
 #
 # This program is free software; you can redistribute it and/or modify
@@ -18,6 +19,23 @@ from ._misc import AudioFileError, translate_errors
 from ._image import EmbeddedImage
 
 ITUNES: str = "----:com.apple.iTunes"
+
+
+def _freeform_to_key(name: str) -> str:
+    """Convert a freeform atom name (the part after the mean/ prefix)
+    to a QL tag key, following the conventions used by the tag map
+    above (lowercase, spaces replaced by underscores).
+    """
+
+    return name.replace(" ", "_").lower()
+
+
+def _key_supported(key: str) -> bool:
+    """Whether a QL tag key can be stored as a freeform atom.
+    Mirrors the restrictions of AudioFile.can_change().
+    """
+
+    return bool(key) and key.isascii() and "=" not in key and "~" not in key
 
 
 class MP4File(AudioFile):
@@ -107,6 +125,13 @@ class MP4File(AudioFile):
                     self[name] = "\n".join(values)
             elif key == "covr":
                 self.has_images = True
+            elif key.startswith(f"{ITUNES}:"):
+                # Unknown freeform atom: round-trip it under its
+                # canonicalized name so custom tags survive a save.
+                name = _freeform_to_key(key[len(ITUNES) + 1 :])
+                if name in self.__tupletranslate.values() or not _key_supported(name):
+                    continue
+                self[name] = "\n".join(decode(v).strip("\x00") for v in values)
         self.sanitize(filename)
 
     def write(self):
@@ -119,11 +144,24 @@ class MP4File(AudioFile):
             except KeyError:
                 pass
 
+        # All iTunes freeform atoms are round-tripped through the tag
+        # dict, so drop them all before saving. This also removes stale
+        # case-variants (e.g. "REPLAYGAIN_ALBUM_GAIN") of rewritten tags.
+        # Freeform atoms of other namespaces are not touched.
+        for atom in list(audio.keys()):
+            if atom.startswith(f"{ITUNES}:"):
+                del audio[atom]
+
         for key in self.realkeys():
+            if key in self.__tupletranslate.values():
+                # Written below from ~#track / ~#disc.
+                continue
             try:
                 name = self.__rtranslate[key]
             except KeyError:
-                continue
+                if not _key_supported(key):
+                    continue
+                name = f"{ITUNES}:{key}"
             values = self.list(key)
             if name == "tmpo":
                 values = [int(round(float(v))) for v in values]
@@ -146,10 +184,9 @@ class MP4File(AudioFile):
         return False
 
     def can_change(self, key=None):
-        ok = list(self.__rtranslate.keys()) + list(self.__rtupletranslate.keys())
-        if key is None:
-            return ok
-        return super().can_change(key) and (key in ok)
+        # Custom tags are stored as freeform (----:com.apple.iTunes:)
+        # atoms, so any user-editable tag is changeable.
+        return super().can_change(key)
 
     def get_images(self):
         images = []

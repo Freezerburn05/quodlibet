@@ -1,5 +1,6 @@
 # Copyright 2013 Christoph Reiter
 #           2026 Gwyneth Morgan
+#           2026 Freezerburn05
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -163,8 +164,59 @@ class TMP4File(TestCase):
 
     def test_can_change(self):
         assert self.song.can_change("title")
-        assert not self.song.can_change("foobar")
-        assert "albumartist" in self.song.can_change()
+        assert self.song.can_change("foobar")
+        assert not self.song.can_change("=invalid")
+        assert not self.song.can_change("~invalid")
+        assert self.song.can_change() is True
+
+    def test_custom_tag_roundtrip(self):
+        self._assert_tag_supported("my_custom_tag")
+
+    def test_freeform_atom_normalization(self):
+        # Unmapped freeform atoms are read as lowercase underscore keys
+        # and written back canonically.
+        tag = mutagen.mp4.MP4(self.f)
+        tag["----:com.apple.iTunes:Acoustid Id"] = [b"foo"]
+        tag.save()
+
+        song = MP4File(self.f)
+        self.assertEqual(song("acoustid_id"), "foo")
+
+        song["acoustid_id"] = "bla"
+        song.write()
+
+        tag = mutagen.mp4.MP4(self.f)
+        assert "----:com.apple.iTunes:Acoustid Id" not in tag
+        self.assertEqual(tag["----:com.apple.iTunes:acoustid_id"], [b"bla"])
+
+    def test_freeform_other_vendor_preserved(self):
+        # Freeform atoms of other namespaces must survive a write untouched.
+        tag = mutagen.mp4.MP4(self.f)
+        tag["----:com.other.vendor:Some Atom"] = [b"foo"]
+        tag.save()
+
+        song = MP4File(self.f)
+        assert "some_atom" not in song
+        song.write()
+
+        tag = mutagen.mp4.MP4(self.f)
+        self.assertEqual(tag["----:com.other.vendor:Some Atom"], [b"foo"])
+
+    def test_freeform_tuple_keys_ignored(self):
+        # tracknumber/discnumber have a native representation; freeform
+        # variants are ignored (not duplicated) and dropped on save.
+        tag = mutagen.mp4.MP4(self.f)
+        tag.pop("trkn", None)
+        tag["----:com.apple.iTunes:TRACKNUMBER"] = [b"5"]
+        tag.save()
+
+        song = MP4File(self.f)
+        assert "tracknumber" not in song
+        song.write()
+
+        tag = mutagen.mp4.MP4(self.f)
+        assert "trkn" not in tag
+        assert "----:com.apple.iTunes:TRACKNUMBER" not in tag
 
     def test_invalid(self):
         path = get_data_path("empty.xm")
